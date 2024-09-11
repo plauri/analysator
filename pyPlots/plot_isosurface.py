@@ -1695,8 +1695,9 @@ def plot_neutral_sheet(filename=None,
     if len(plot_title)!=0:
         # Add 3D slice position in title
         plot_title = plot_title
-        plot_title = pt.plot.mathmode(pt.plot.bfstring(plot_title))        
-        ax1.set_title(plot_title,fontsize=fontsize2,fontweight='bold')
+        if title is None:
+            plot_title = pt.plot.mathmode(pt.plot.bfstring(plot_title))        
+        ax1.set_title(plot_title,fontsize=fontsize2)#,fontweight='bold')
 
     ax1.set_xlim([boxcoords[0],boxcoords[1]])
     ax1.set_ylim([boxcoords[2],boxcoords[3]])
