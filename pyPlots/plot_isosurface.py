@@ -52,17 +52,18 @@ def plot_isosurface(filename=None,
                     surf_var=None, surf_op=None, surf_level=None,
                     color_var=None, color_op=None,
                     surf_step=1,
-                    #
+                    expression=None, pass_times=None, diff=None,
                     title=None, cbtitle=None,
                     draw=None, usesci=None,
                     symmetric=False,
                     highres=None,
                     boxm=[],boxre=[],
                     colormap=None,
-                    run=None,wmark=None, nocb=False,
+                    run=None, wmark=None, nocb=False, internalcb=False,
                     unit=None, thick=1.0,scale=1.0,
                     vscale=1.0,
                     vmin=None, vmax=None, lin=None, symlog=None,
+                    axes=None, cbaxes=None,
                     angle = [30.,90.], transparent=True
                     ):
 
@@ -107,11 +108,19 @@ def plot_isosurface(filename=None,
                         A given of 0 translates to a threshold of max(abs(vmin),abs(vmax)) * 1.e-2.
     :kword wmark:       If set to non-zero, will plot a Vlasiator watermark in the top left corner.
     :kword highres:     Creates the image in high resolution, scaled up by this value (suitable for logging.info). 
+    :kword axes:        Provide the routine a set of axes to draw within instead of generating a new image.
+                        It is recommended to either also provide cbaxes or activate nocb, unless one wants a colorbar
+                        to be automatically added next to the panel (but this may affect the overall layout)
+                        Note that the aspect ratio of the colormap is made equal in any case, hence the axes
+                        proportions may change if the box and axes size are not designed to match by the user
+    :kword cbaxes:      Provide the routine a set of axes for the colourbar.
     :kword draw:        Set to nonzero in order to draw image on-screen instead of saving to file (requires x-windowing)
     :kword transparent: Set to False in order to make the surface opaque
     :kword scale:       Scale text size (default=1.0)
     :kword thick:       line and axis thickness, default=1.0
     :kword nocb:        Set to suppress drawing of colourbar
+    :kword internalcb:  Set to draw colorbar inside plot instead of outside. If set to a text
+                        string, tries to use that as the location, e.g. "NW","NE","SW","SW"
     :kword angle:       Viewing elevation and azimuthal angles in degrees
 
     :returns:           Outputs an image to a file or to the screen.
@@ -153,7 +162,7 @@ def plot_isosurface(filename=None,
         usesci=1
     
     if colormap==None:
-        # Default values
+        # Default valuescb_title_use
         colormap="hot_desaturated"
         if color_op!=None:
             colormap="bwr"
@@ -175,13 +184,15 @@ def plot_isosurface(filename=None,
         logging.info("Unknown time format encountered")
 
     # Plot title with time
-    if title==None:        
-        if timeval == None:    
-            logging.info("Unknown time format encountered")
+    if title is None or title=="msec" or title=="musec":        
+        if timeval is None:    
             plot_title = ''
         else:
-            #plot_title = "t="+str(int(timeval))+' s'
-            plot_title = "t="+'{:4.2f}'.format(timeval)+' s'
+            timeformat='{:4.1f}'
+            if title=="sec": timeformat='{:4.0f}'
+            if title=="msec": timeformat='{:4.3f}'
+            if title=="musec": timeformat='{:4.6f}'
+            plot_title = "t="+timeformat.format(timeval)+r'\,'+pt.plot.rmstring('s')
     else:
         plot_title = title
 
@@ -499,7 +510,192 @@ def plot_isosurface(filename=None,
         if np.ndim(color_data)!=1:
             color_data=np.linalg.norm(color_data, axis=-1)
 
-    if color_var==None:
+    elif expression:
+        nverts = len(verts[:,0])
+        logging.info("Extracting color values for "+str(nverts)+" vertices and "+str(len(faces[:,0]))+" faces.")
+        all_coords = np.empty((nverts, 3))
+        for i in np.arange(nverts):            
+            # # due to mesh generation, some coordinates may be outside simulation domain
+            # WARNING this means it might be doing wrong things in the periodic dimension of 2.9D runs.
+            coords = verts[i,:]*unit 
+            coords[0] = max(coords[0],simext_org[0]+0.1*cellsize)
+            coords[0] = min(coords[0],simext_org[1]-cellsize)
+            coords[1] = max(coords[1],simext_org[2]+0.1*cellsize)
+            coords[1] = min(coords[1],simext_org[3]-cellsize)
+            coords[2] = max(coords[2],simext_org[4]+0.1*cellsize)
+            coords[2] = min(coords[2],simext_org[5]-cellsize)
+            all_coords[i] = coords
+
+        
+
+        # Choose CellIDs inside the isosurface box
+        color_ids, color_idx = ids3d.ids3d_box(cellids, contour_box_low, contour_box_up, reflevel, xsize, ysize, zsize, [xmin, ymin, zmin, xmax, ymax, zmax])
+        vg_coords = f.read_variable("vg_coordinates", color_ids)
+
+        reqvariables = None
+        pass_vars = []
+        if expression: # Check the expression
+            try:
+                reqvariables = expression(None,True)
+            except:
+                pass
+        # if external: # Check the external
+        #     try:
+        #         reqvariables = external(None,None,None,None,True)
+        #     except:
+        #         pass
+        if reqvariables:
+            try:
+                for i in reqvariables:
+                    if i == "3d":
+                        pass3d = True
+                    elif i == "noupscale":
+                        meshReflevel = 0
+                    elif not (i in pass_vars): 
+                        pass_vars.append(i)
+            except:
+                pass
+
+        # If expression or external routine need variables, read them from the file.
+        if pass_vars:        
+            if not pass_times:
+                # Note: pass_maps is now a dictionary
+                pass_maps = {}
+                # Gather the required variable maps for a single time step
+                for mapval in pass_vars:
+
+                    # vlasov grid, AMR
+                    pass_map = f.read_variable(mapval, color_ids)
+                    #pass_map = pass_map[indexids] # sort
+
+                    if np.ndim(pass_map)==1:    
+                        var_interpolation = scipy.interpolate.RBFInterpolator(vg_coords, pass_map, neighbors = 27)
+                        pass_map = var_interpolation(all_coords)
+                    elif np.ndim(pass_map)==2: # vector variable
+                        temporary_pass_map = []
+                        for s in range(pass_map.shape[1]):
+                            var_interpolation = scipy.interpolate.RBFInterpolator(vg_coords, pass_map[:,s], neighbors = 27)
+                            temporary_pass_map.append(var_interpolation(all_coords))
+                        pass_map = np.dstack(tuple(temporary_pass_map))
+
+                    elif np.ndim(pass_map)==3:  # tensor variable
+                        logging.info("Tensor support has not been implemented yet! Aborting")
+                        return -1
+                    else:
+                        logging.info("Error in reshaping pass_maps!")
+
+
+                    pass_maps[mapval] = pass_map # add to the dictionary
+            else:
+                # Or gather over a number of time steps
+                # Note: pass_maps is now a list of dictionaries
+                pass_maps = []
+                if diff:
+                    logging.info("Comparing files "+filename+" and "+diff)
+                elif step is not None and filename:
+                    currstep = step
+                else:
+                    if filename: # parse from filename
+                        currstep = int(filename[-12:-5])
+                    else:
+                        logging.info("Error, cannot determine current step for time extent extraction!")
+                        return
+                # define relative time step selection
+                if np.ndim(pass_times)==0:
+                    dsteps = np.arange(-abs(int(pass_times)),abs(int(pass_times))+1)
+                elif np.ndim(pass_times)==1 and len(pass_times)==2:
+                    dsteps = np.arange(-abs(int(pass_times[0])),abs(int(pass_times[1]))+1)
+                else:
+                    logging.info("Invalid value given to pass_times")
+                    return
+                # Loop over requested times
+                for ds in dsteps:
+                    if diff:
+                        if ds==0:
+                            filenamestep = filename
+                        else:
+                            filenamestep = diff
+                    else:
+                        # Construct using known filename.
+                        filenamestep = filename[:-12]+str(currstep+ds).rjust(7,'0')+'.vlsv'
+                        logging.info(filenamestep)
+                    fstep=pt.vlsvfile.VlsvReader(filenamestep)
+                    step_cellids = fstep.read_variable("CellID")
+                    step_indexids = step_cellids.argsort()
+                    step_cellids = step_cellids[step_indexids]
+                    step_reflevel = ids3d.refinement_level(xsize, ysize, zsize, step_cellids[-1])
+                    for i in range(5): # Check if Vlasov grid doesn't reach maximum (fsgrid) refinement
+                        if xsize*(2**(step_reflevel + i)) == xsizefg:
+                            step_reflevel += i
+                            break
+
+
+                    # Append new dictionary as new timestep
+                    pass_maps.append({})
+                    # Add relative step identifier to dictionary
+                    pass_maps[-1]['dstep'] = ds
+                    # Gather the required variable maps
+                    for mapval in pass_vars:
+
+                        # vlasov grid, AMR
+                        pass_map = fstep.read_variable(mapval)
+                        pass_map = pass_map[step_indexids] # sort
+
+                        if np.ndim(pass_map)==1:    
+                            var_interpolation = scipy.interpolate.RBFInterpolator(vg_coords, pass_map, neighbors = 27)
+                            pass_map = var_interpolation(all_coords)
+                        elif np.ndim(pass_map)==2: # vector variable
+                            temporary_pass_map = []
+                            for s in range(pass_map.shape[1]):
+                                var_interpolation = scipy.interpolate.RBFInterpolator(vg_coords, pass_map[:,s], neighbors = 27)
+                                temporary_pass_map.append(var_interpolation(all_coords))
+                            pass_map = np.dstack(tuple(temporary_pass_map))
+
+                        elif np.ndim(pass_map)==3:  # tensor variable
+                            logging.info("Tensor support has not been implemented yet! Aborting")
+                            return -1
+                        else:
+                            logging.info("Error in reshaping pass_maps!")
+                        pass_maps[-1][mapval] = pass_map # add to the dictionary
+
+        # colorbar title for diffs:
+        if diff:
+            listofkeys = iter(pass_maps[0])
+            while True:
+                diffvar = next(listofkeys)
+                if diffvar!="dstep": break
+            cb_title_use = pt.plot.mathmode(pt.plot.bfstring(pt.plot.rmstring("DIFF0~"+diffvar.replace("_",r"\_"))))
+        # Evaluate time difference
+        if diff:
+            tvf=pt.vlsvfile.VlsvReader(filename)
+            t0 = tvf.read_parameter('time')
+            tvf1=pt.vlsvfile.VlsvReader(diff)
+            t1 = tvf1.read_parameter('time')
+            if (not np.isclose(t1-t0, 0.0, rtol=1e-6)):
+                plot_title = plot_title + "~dt=" + str(t1-t0)
+
+
+        #Optional user-defined expression used for color panel instead of a single pre-existing var
+        if expression:
+            color_data = expression(pass_maps).flatten()*vscale
+
+            # Handle operators
+
+            if (color_op and (color_op != 'pass') and (color_op != 'magnitude')):
+                if color_op=='x': 
+                    color_op = '0'
+                if color_op=='y': 
+                    color_op = '1'
+                if color_op=='z': 
+                    color_op = '2'
+                if not color_op.isdigit():
+                    logging.info("Error parsing operator for custom expression!")
+                    return
+                elif np.ndim(color_data)==3:
+                    color_data = color_data[:,:,int(color_op)]
+
+
+    if color_var==None and expression==None:
         # dummy norm
         logging.info("No surface color given, using dummy setup")
         norm = BoundaryNorm([0,1], ncolors=cmapuse.N, clip=True)
@@ -578,10 +774,15 @@ def plot_isosurface(filename=None,
 
         logging.info("Selected color range: "+str(vminuse)+" to "+str(vmaxuse))
 
-    # Create 300 dpi image of suitable size
-    fig = plt.figure(figsize=[4.5,4.5],dpi=300)
-    #ax1 = fig.gca(projection='3d')
-    ax1 = fig.add_subplot(111, projection='3d')
+
+    if not axes:
+        # Create 300 dpi image of suitable size
+        fig = plt.figure(figsize=[4.5,4.5],dpi=300)
+        ax1 = fig.add_subplot(111, projection='3d')
+    else:
+        ax1=axes
+        fig = plt.gcf() # get current figure
+
 
     # If requested high res image
     if highres:
@@ -599,6 +800,8 @@ def plot_isosurface(filename=None,
         # streamlinethick=streamlinethick*highresscale # streamlinethick not defined, neither used in this function
         # vectorsize=vectorsize*highresscale # vectorsize not defined, neither used in this function
 
+    
+
     # Generate virtual bounding box to get equal aspect
     maxrange = np.array([boxcoords[1]-boxcoords[0], boxcoords[3]-boxcoords[2], boxcoords[5]-boxcoords[4]]).max() / 2.0
     midvals = np.array([boxcoords[1]+boxcoords[0], boxcoords[3]+boxcoords[2], boxcoords[5]+boxcoords[4]]) / 2.0
@@ -610,9 +813,9 @@ def plot_isosurface(filename=None,
         generatedsurface = ax1.plot_trisurf(verts[:,2], verts[:,0], verts[:,1], triangles=faces,
                                             cmap=cmapuse, norm=norm, vmin=vminuse, vmax=vmaxuse, 
                                             lw=0, shade=False, edgecolors=None, antialiased=transparent)
-        ax1.set_xlabel("z ["+unitstr+"]", fontsize=fontsize3)
-        ax1.set_ylabel("x ["+unitstr+"]", fontsize=fontsize3)
-        ax1.set_zlabel("y ["+unitstr+"]", fontsize=fontsize3)
+        ax1.set_xlabel("Z ["+unitstr+"]", fontsize=fontsize3)
+        ax1.set_ylabel("X ["+unitstr+"]", fontsize=fontsize3)
+        ax1.set_zlabel("Y ["+unitstr+"]", fontsize=fontsize3)
 
 
         # Set camera angle
@@ -627,29 +830,46 @@ def plot_isosurface(filename=None,
         generatedsurface = ax1.plot_trisurf(verts[:,0], verts[:,1], verts[:,2], triangles=faces,
                                             cmap=cmapuse, norm=norm, vmin=vminuse, vmax=vmaxuse, 
                                             lw=0.2, shade=False, edgecolors=None, antialiased=transparent)
-        ax1.set_xlabel("x ["+unitstr+"]", fontsize=fontsize3)
-        ax1.set_ylabel("y ["+unitstr+"]", fontsize=fontsize3)
-        ax1.set_zlabel("z ["+unitstr+"]", fontsize=fontsize3)
+
+        xlabelstr = pt.plot.mathmode(pt.plot.bfstring(r'X'+r'\,['+unitstr+']'))
+        ylabelstr = pt.plot.mathmode(pt.plot.bfstring(r'Y'+r'\,['+unitstr+']'))
+        zlabelstr = pt.plot.mathmode(pt.plot.bfstring(r'Z'+r'\,['+unitstr+']'))
+        ax1.set_xlabel(xlabelstr, fontsize=fontsize3, weight='black')
+        ax1.set_ylabel(ylabelstr, fontsize=fontsize3, weight='black')
+        ax1.set_zlabel(zlabelstr, fontsize=fontsize3, weight='black')
+
         # Set camera angle
         ax1.view_init(elev=angle[0], azim=angle[1])
         # Set virtual bounding box
         ax1.set_xlim([midvals[0]-maxrange, midvals[0]+maxrange])
         ax1.set_ylim([midvals[1]-maxrange, midvals[1]+maxrange])
         ax1.set_zlim([midvals[2]-maxrange, midvals[2]+maxrange])
-        ax1.tick_params(labelsize=fontsize3,width=thick,length=3*thick)
+        for item in ax1.get_xticklabels():
+            item.set_fontsize(fontsize3)
+            item.set_fontweight('black')
+        for item in ax1.get_yticklabels():
+            item.set_fontsize(fontsize3)
+            item.set_fontweight('black')
+        for item in ax1.get_zticklabels():
+            item.set_fontsize(fontsize3)
+            item.set_fontweight('black')
 
 
     # Setting per-triangle colours for plot_trisurf needs to be done
     # as a separate set_array call.
-    if color_var != None:
+    if color_var != None or expression != None:
         # Find face-averaged colors
         # (simply setting the array to color_data failed for some reason)
         colors = np.mean(color_data[faces], axis=1)
         generatedsurface.set_array(colors)
         
-    # Title and plot limits
+        # Title and plot limits
     if len(plot_title)!=0:
-        ax1.set_title(plot_title,fontsize=fontsize2,fontweight='bold')
+        if title is None:
+            plot_title = pt.plot.mathmode(pt.plot.bfstring(plot_title))        
+            ax1.set_title(plot_title,fontsize=fontsize2,fontweight='bold')
+        else:
+            ax1.set_title(plot_title,fontsize=fontsize2)
 
 
     # ax1.set_aspect('equal') #<<<--- this does not work for 3D plots!
@@ -663,28 +883,79 @@ def plot_isosurface(filename=None,
 
 
     if not nocb:
-        # First draw colorbar
-        if usesci==0:        
-            cb = fig.colorbar(generatedsurface,ticks=ticks, format=mtick.FuncFormatter(pt.plot.cbfmt), drawedges=False, fraction=0.023, pad=0.02)
+        if cbaxes: 
+            # Colorbar axes are provided
+            cax = cbaxes
+            cbdir="right"; horalign="left"
+        elif internalcb:
+            # Colorbar within plot area
+            cbloc=1; cbdir="left"; horalign="right"
+            if type(internalcb) is str:
+                if internalcb=="NW":
+                    cbloc=2; cbdir="right"; horalign="left"
+                if internalcb=="SW": 
+                    cbloc=3; cbdir="right"; horalign="left"
+                if internalcb=="SE": 
+                    cbloc=4; cbdir="left";  horalign="right"
+            # borderpad default value is 0.5, need to increase it to make room for colorbar title
+            cax = inset_locator.inset_axes(ax1, width="5%", height="35%", loc=cbloc, borderpad=1.5,
+                             bbox_transform=ax1.transAxes, bbox_to_anchor=(0,0,1,1))
         else:
-            cb = fig.colorbar(generatedsurface,ticks=ticks,format=mtick.FuncFormatter(pt.plot.cbfmtsci),drawedges=False, fraction=0.046, pad=0.04)
+            # Split existing axes to make room for colorbar
+            divider = make_axes_locatable(ax1)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            cbdir="right"; horalign="left"
 
+        # Colourbar title
         if len(cb_title_use)!=0:
             cb_title_use = pt.plot.mathmode(pt.plot.bfstring(cb_title_use))
 
+        # Set flag which affects colorbar decimal precision
         if lin is None:
             pt.plot.cb_linear = False
         else:
             pt.plot.cb_linear = True
 
+        # First draw colorbar
+        if usesci:
+            cb = plt.colorbar(generatedsurface, ticks=ticks, format=mtick.FuncFormatter(pt.plot.cbfmtsci), cax=cax, drawedges=False)
+        else:
+            #cb = plt.colorbar(fig1, ticks=ticks, format=mtick.FormatStrFormatter('%4.2f'), cax=cax, drawedges=False)
+            cb = plt.colorbar(generatedsurface, ticks=ticks, format=mtick.FuncFormatter(pt.plot.cbfmt), cax=cax, drawedges=False)
+        cb.outline.set_linewidth(thick)
+        cb.ax.yaxis.set_ticks_position(cbdir)
         # Ensure minor tick marks are off
         if lin is not None:
             cb.minorticks_off()
 
-        cb.ax.tick_params(labelsize=fontsize3,width=thick,length=3*thick)
-        cb.outline.set_linewidth(thick)
-        cb.ax.set_title(cb_title_use)
-        cb.ax.title.set_horizontalalignment('center')
+        if not cbaxes:
+            cb.ax.tick_params(labelsize=fontsize3,width=thick,length=3*thick)
+            cb_title = cax.set_title(cb_title_use,fontsize=fontsize3,fontweight='bold', horizontalalignment=horalign)
+            cb_title.set_position((0.,1.+0.025*scale)) # avoids having colourbar title too low when fontsize is increased
+        else:
+            cb.ax.tick_params(labelsize=fontsize,width=thick,length=3*thick)
+            cb_title = cax.set_title(cb_title_use,fontsize=fontsize,fontweight='bold', horizontalalignment=horalign)
+
+        # Perform intermediate draw if necessary to gain access to ticks
+        if (symlog is not None and np.isclose(vminuse/vmaxuse, -1.0, rtol=0.2)) or (not lin and symlog is None):
+            fig.canvas.draw() # draw to get tick positions
+
+        # Adjust placement of innermost ticks for symlog if it indeed is (quasi)symmetric
+        if symlog is not None and np.isclose(vminuse/vmaxuse, -1.0, rtol=0.2):
+            cbt=cb.ax.yaxis.get_ticklabels()
+            (cbtx,cbty) = cbt[len(cbt)//2-1].get_position() # just below zero
+            if abs(0.5-cbty)/scale < 0.1:
+                cbt[len(cbt)//2-1].set_va("top")
+            (cbtx,cbty) = cbt[len(cbt)//2+1].get_position() # just above zero
+            if abs(0.5-cbty)/scale < 0.1:
+                cbt[len(cbt)//2+1].set_va("bottom")
+            if len(cbt)>=7: # If we have at least seven ticks, may want to adjust next ones as well
+                (cbtx,cbty) = cbt[len(cbt)//2-2].get_position() # second below zero
+                if abs(0.5-cbty)/scale < 0.15:
+                    cbt[len(cbt)//2-2].set_va("top")
+                (cbtx,cbty) = cbt[len(cbt)//2+2].get_position() # second above zero
+                if abs(0.5-cbty)/scale < 0.15:
+                    cbt[len(cbt)//2+2].set_va("bottom")
 
         # Adjust precision for colorbar ticks
         thesetickvalues = cb.locator()
@@ -702,25 +973,12 @@ def plot_isosurface(filename=None,
         if int(precision_b)<1: pt.plot.decimalprecision_cblin = str(1+abs(-int(precision_b)))
         cb.update_ticks()
 
-        if symlog is not None and np.isclose(vminuse/vmaxuse, -1.0, rtol=0.2):
-            cbt=cb.ax.yaxis.get_ticklabels()
-            (cbtx,cbty) = cbt[len(cbt)//2-1].get_position() # just below zero
-            if abs(0.5-cbty)/scale < 0.1:
-                cbt[len(cbt)//2-1].set_va("top")
-            (cbtx,cbty) = cbt[len(cbt)//2+1].get_position() # just above zero
-            if abs(0.5-cbty)/scale < 0.1:
-                cbt[len(cbt)//2+1].set_va("bottom")
-            if len(cbt)>=7: # If we have at least seven ticks, may want to adjust next ones as well
-                (cbtx,cbty) = cbt[len(cbt)//2-2].get_position() # second below zero
-                if abs(0.5-cbty)/scale < 0.15:
-                    cbt[len(cbt)//2-2].set_va("top")
-                (cbtx,cbty) = cbt[len(cbt)//2+2].get_position() # second above zero
-                if abs(0.5-cbty)/scale < 0.15:
-                    cbt[len(cbt)//2+2].set_va("bottom")
-
         # if too many subticks in logarithmic colorbar:
-        if lin is None and symlog is None:
+        if not lin and symlog is None:
             nlabels = len(cb.ax.yaxis.get_ticklabels()) #/ ratio
+            # Force less ticks for internal colorbars
+            if internalcb: 
+                nlabels = nlabels * 1.5
             valids = ['1','2','3','4','5','6','7','8','9']
             if nlabels > 10:
                 valids = ['1','2','3','4','5','6','8']
@@ -736,8 +994,6 @@ def plot_isosurface(filename=None,
                 firstdigit = labeltext[0]
                 if not firstdigit in valids: 
                     label.set_visible(False)
-
-
 
     # Add Vlasiator watermark
     if wmark!=None:        
@@ -1046,7 +1302,7 @@ def plot_neutral_sheet(filename=None,
             if title=="sec": timeformat='{:4.0f}'
             if title=="msec": timeformat='{:4.3f}'
             if title=="musec": timeformat='{:4.6f}'
-            plot_title = "t="+timeformat.format(timeval)+r'\,s'
+            plot_title = "t="+timeformat.format(timeval)+r'\,'+pt.plot.rmstring('s')
     else:
         plot_title = title
 
@@ -1266,10 +1522,6 @@ def plot_neutral_sheet(filename=None,
     sizes[0] = int(sizes[0]*2**reflevel)
     sizes[1] = int(sizes[1]*2**reflevel)
 
-    # Allow title override
-    if cbtitle is not None:
-        # Here allow underscores for manual math mode
-        cb_title_use = cbtitle       
 
     # Generates the mesh to map the data to.
     [XmeshXY,YmeshXY] = np.meshgrid(np.linspace(simext[0],simext[1],num=sizes[0]+1),np.linspace(simext[2],simext[3],num=sizes[1]+1))
@@ -1349,6 +1601,11 @@ def plot_neutral_sheet(filename=None,
     else:
         # Expression set, use generated or provided colorbar title
         cb_title_use = expression.__name__ + operatorstr
+
+    # Allow title override
+    if cbtitle is not None:
+        # Here allow underscores for manual math mode
+        cb_title_use = cbtitle       
 
     #Attempt to call external and expression functions to see if they have required
     # variable information (If they accept the requestvars keyword, they should
@@ -1700,11 +1957,11 @@ def plot_neutral_sheet(filename=None,
 
     # Title and plot limits
     if len(plot_title)!=0:
-        # Add 3D slice position in title
-        plot_title = plot_title
         if title is None:
             plot_title = pt.plot.mathmode(pt.plot.bfstring(plot_title))        
-        ax1.set_title(plot_title,fontsize=fontsize2)#,fontweight='bold')
+            ax1.set_title(plot_title,fontsize=fontsize2,fontweight='bold')
+        else:
+            ax1.set_title(plot_title,fontsize=fontsize2)
 
     ax1.set_xlim([boxcoords[0],boxcoords[1]])
     ax1.set_ylim([boxcoords[2],boxcoords[3]])
