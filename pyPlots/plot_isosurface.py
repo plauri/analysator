@@ -1511,7 +1511,7 @@ def plot_neutral_sheet(filename=None,
     else:
         logging.info("error!")
         quit
-              
+
     rhomap = rhomap[indexids] # sort
     rhomap = rhomap[indexlist] # find required cells
     # Create the plotting grid
@@ -1545,10 +1545,10 @@ def plot_neutral_sheet(filename=None,
         # Save lists for masking
         MaskX = np.where(~np.all(maskgrid.mask, axis=1))[0] # [0] takes the first element of a tuple
         MaskY = np.where(~np.all(maskgrid.mask, axis=0))[0]
-        XmeshPass = XmeshXY[MaskX[0]:MaskX[-1]+1,:]
-        XmeshPass = XmeshPass[:,MaskY[0]:MaskY[-1]+1]
-        YmeshPass = YmeshXY[MaskX[0]:MaskX[-1]+1,:]
-        YmeshPass = YmeshPass[:,MaskY[0]:MaskY[-1]+1]
+        XmeshPass = XmeshXY[MaskX[0]:MaskX[-1]+2,:]
+        XmeshPass = XmeshPass[:,MaskY[0]:MaskY[-1]+2]
+        YmeshPass = YmeshXY[MaskX[0]:MaskX[-1]+2,:]
+        YmeshPass = YmeshPass[:,MaskY[0]:MaskY[-1]+2]
         XmeshCentres = XmeshCentres[MaskX[0]:MaskX[-1]+1,:]
         XmeshCentres = XmeshCentres[:,MaskY[0]:MaskY[-1]+1]
         YmeshCentres = YmeshCentres[MaskX[0]:MaskX[-1]+1,:]
@@ -1558,7 +1558,7 @@ def plot_neutral_sheet(filename=None,
         XmeshPass = np.ma.array(XmeshXY)
         YmeshPass = np.ma.array(YmeshXY)
 
-    sheet_xyz, folds = sheet_coordinate_finder(f, boxcoords, axisunit, cellids, reflevel, indexids, XmeshPass, YmeshPass, sheetlayer)
+    sheet_xyz, folds = sheet_coordinate_finder(f, boxcoords, axisunit, cellids, reflevel, indexids, XmeshCentres, YmeshCentres, sheetlayer)
 
     # Read and sort coordinates for data interpolation
     vg_coordinates = f.read_variable("vg_coordinates")
@@ -1596,7 +1596,7 @@ def plot_neutral_sheet(filename=None,
 
         data_interpolation = scipy.interpolate.RBFInterpolator(vg_coordinates, datamap, neighbors = 27)
 
-        datamap = data_interpolation(sheet_xyz).reshape(XmeshPass.shape)
+        datamap = data_interpolation(sheet_xyz).reshape(XmeshCentres.shape)
 
     else:
         # Expression set, use generated or provided colorbar title
@@ -1649,12 +1649,12 @@ def plot_neutral_sheet(filename=None,
 
                 if np.ndim(pass_map)==1:    
                     var_interpolation = scipy.interpolate.RBFInterpolator(vg_coordinates, pass_map, neighbors = 27)
-                    pass_map = var_interpolation(sheet_xyz).reshape(XmeshPass.shape)
+                    pass_map = var_interpolation(sheet_xyz).reshape(XmeshCentres.shape)
                 elif np.ndim(pass_map)==2: # vector variable
                     temporary_pass_map = []
                     for s in range(pass_map.shape[1]):
                         var_interpolation = scipy.interpolate.RBFInterpolator(vg_coordinates, pass_map[:,s], neighbors = 27)
-                        temporary_pass_map.append(var_interpolation(sheet_xyz).reshape(XmeshPass.shape))
+                        temporary_pass_map.append(var_interpolation(sheet_xyz).reshape(XmeshCentres.shape))
                     pass_map = np.dstack(tuple(temporary_pass_map))
 
                 elif np.ndim(pass_map)==3:  # tensor variable
@@ -1724,12 +1724,12 @@ def plot_neutral_sheet(filename=None,
 
                     if np.ndim(pass_map)==1:    
                         var_interpolation = scipy.interpolate.RBFInterpolator(vg_coordinates, pass_map, neighbors = 27)
-                        pass_map = var_interpolation(fsheet_xyz).reshape(XmeshPass.shape)
+                        pass_map = var_interpolation(fsheet_xyz).reshape(XmeshCentres.shape)
                     elif np.ndim(pass_map)==2: # vector variable
                         temporary_pass_map = []
                         for s in range(pass_map.shape[1]):
                             var_interpolation = scipy.interpolate.RBFInterpolator(vg_coordinates, pass_map[:,s], neighbors = 27)
-                            temporary_pass_map.append(var_interpolation(fsheet_xyz).reshape(XmeshPass.shape))
+                            temporary_pass_map.append(var_interpolation(fsheet_xyz).reshape(XmeshCentres.shape))
                         pass_map = np.dstack(tuple(temporary_pass_map))
 
                     elif np.ndim(pass_map)==3:  # tensor variable
@@ -2011,7 +2011,7 @@ def plot_neutral_sheet(filename=None,
     if vectors:
 
         sheet_cids = [f.get_cellid(sheet_coord) for sheet_coord in sheet_xyz]   #slow
-        xlen, ylen = XmeshPass.shape
+        xlen, ylen = XmeshCentres.shape
         
         # vlasov grid, AMR
         vectmap = f.read_variable(vectors, sheet_cids)
