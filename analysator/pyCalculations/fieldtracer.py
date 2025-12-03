@@ -252,7 +252,6 @@ def fg_trace(vlsvReader, fg, seed_coords, max_iterations, dx, multiplier, stop_c
       V_unit = V_unit / V_mag[np.newaxis,:]
       new_points = points + multiplier*V_unit * dx
       points_traced[mask_update,i,:] = new_points[mask_update,:]
-
       mask_update[stop_condition(vlsvReader, new_points)] = False
       points = new_points
       # points_traced[~mask_update, i, :] = points_traced[~mask_update, i-1, :]
@@ -291,6 +290,8 @@ def vg_trace(vlsvReader, vg, seed_coords, max_iterations, dx, multiplier, stop_c
       points_traced_unique[mask_update,i,:] = next_points[mask_update,:]
       # distances = np.linalg.norm(points_traced_unique[:,i,:],axis = 1)
       mask_update[stop_condition(vlsvReader, points_traced_unique[:,i,:])] = False
+      if ~np.all(mask_update):
+         break
 
       # points_traced_unique[~mask_update, i, :] = points_traced_unique[~mask_update, i-1, :]
 
@@ -305,6 +306,10 @@ def default_stopping_condition(vlsvReader, points):
    z = points[:, 2]
    return (x < xmin)|(x > xmax) | (y < ymin)|(y > ymax) | (z < zmin)|(z > zmax)
    # return np.full((points.shape[0]), False)
+
+def nonexistent_cell_stop(vlsvReader, points):
+   outside_inner_boundary = np.linalg.norm(points, axis=1) > 4.7*6.371e6
+   return outside_inner_boundary + default_stopping_condition(vlsvReader, points)
 
 def static_field_tracer_3d( vlsvReader, seed_coords, max_iterations, dx, direction='+', grid_var = 'vg_b_vol', stop_condition = default_stopping_condition, centering = None ):
    ''' static_field_tracer_3d() integrates along the (static) field-grid vector field to calculate a final position. 
@@ -388,9 +393,9 @@ def static_field_tracer_3d( vlsvReader, seed_coords, max_iterations, dx, directi
          
    # Recursion (trace in both directions and concatenate the results)
    if direction == '+-':
-      backward = static_field_tracer_3d(vlsvReader, seed_coords, max_iterations, dx, direction='-', grid_var = grid_var, stop_condition = default_stopping_condition, centering = centering)
+      backward = static_field_tracer_3d(vlsvReader, seed_coords, max_iterations, dx, direction='-', grid_var = grid_var, stop_condition=stop_condition, centering = centering)
       # backward.reverse()
-      forward = static_field_tracer_3d(vlsvReader, seed_coords, max_iterations, dx, direction='+', grid_var = grid_var, stop_condition = default_stopping_condition, centering = centering)
+      forward = static_field_tracer_3d(vlsvReader, seed_coords, max_iterations, dx, direction='+', grid_var = grid_var, stop_condition=stop_condition, centering = centering)
       return np.concatenate((backward[:,::-1,:],forward[:, 1:, :]), axis = 1)
 
    multiplier = -1 if direction == '-' else 1   
