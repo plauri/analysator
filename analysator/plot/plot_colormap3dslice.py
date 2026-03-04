@@ -629,7 +629,10 @@ def plot_colormap3dslice(filename=None,
             if datamap_unit_latex:
                 cb_title_use = cb_title_use + r"\,["+datamap_unit_latex+"]"
 
-            datamap = np.reshape(datamap_info.data, np.shape(datamap))
+            if np.ndim(datamap_info.data) == 1: # Scalar variable
+                datamap = np.reshape(datamap_info.data, np.shape(datamap))
+            else: 
+                datamap = np.reshape(datamap_info.data, np.shape(datamap)+(np.shape(datamap_info.data)[1],))
     else:
         # Expression set, use generated or provided colorbar title
         cb_title_use = expression.__name__ + operatorstr
@@ -744,8 +747,12 @@ def plot_colormap3dslice(filename=None,
                         pass_map = np.swapaxes(pass_map, 0,1)
                 else:
                     # vlasov grid, AMR
-                    pass_map = f.read_variable(mapval)
+                    if not limitedsize:
+                        pass_map = f.read_variable(mapval)
+                    else:
+                        pass_map = f.read_variable("CellID")
                     pass_map = pass_map[indexids] # sort
+
                     if pass3d:
                         if np.ndim(pass_map)==1:
                             pass_shape = None
@@ -779,6 +786,16 @@ def plot_colormap3dslice(filename=None,
                     elif np.ndim(pass_map)==4:  # tensor variable
                         pass_map = pass_map[MaskX[0]:MaskX[-1]+1,:,:,:]
                         pass_map = pass_map[:,MaskY[0]:MaskY[-1]+1,:,:]
+
+                if limitedsize:
+                    ids_list = pass_map.flatten()
+                    passmap_list = f.read_variable(mapval, cellids=ids_list)
+
+                    if np.ndim(passmap_list) == 1: # Scalar variable
+                        pass_map = np.reshape(passmap_list.data, np.shape(pass_map))
+                    else: 
+                        pass_map = np.reshape(passmap_list, np.shape(pass_map)+(np.shape(passmap_list)[1],))
+
                 pass_maps[mapval] = pass_map # add to the dictionary
         else:
             # Or gather over a number of time steps
