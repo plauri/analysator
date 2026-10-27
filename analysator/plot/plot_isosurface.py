@@ -60,11 +60,13 @@ def plot_isosurface(filename=None,
                     highres=None,
                     boxm=[],boxre=[],
                     colormap=None,
-                    run=None,wmark=None, nocb=False,
+                    run=None,wmark=None, nocb=False, internalcb=False,
                     unit=None, thick=1.0,scale=1.0,
                     vscale=1.0,
+                    noborder=False,
                     vmin=None, vmax=None, lin=None, symlog=None,
-                    angle = [30.,90.], transparent=True
+                    axes=None, cbaxes=None, cb_horizontal=False,
+                    viewangle = [30.,90.], transparent=True
                     ):
 
     ''' Plots a coloured isosurface plot with axes and a colour bar.
@@ -114,7 +116,7 @@ def plot_isosurface(filename=None,
     :kwarg scale:       Scale text size (default=1.0)
     :kwarg thick:       line and axis thickness, default=1.0
     :kwarg nocb:        Set to suppress drawing of colourbar
-    :kwarg angle:       Viewing elevation and azimuthal angles in degrees
+    :kwarg viewangle:       Viewing elevation and azimuthal angles in degrees
 
     :returns:           Outputs an image to a file or to the screen.
 
@@ -403,13 +405,14 @@ def plot_isosurface(filename=None,
         surf_level = 0.5*(np.amin(cropped_surf_data)+np.amax(cropped_surf_data))
     logging.info("Minimum found surface value "+str(np.amin(cropped_surf_data))+" surface level "+str(surf_level)+" max "+str(np.amax(cropped_surf_data)))
 
-    # Select plotting back-end based on on-screen plotting or direct to file without requiring x-windowing
-    if draw is not None:
-        if str(matplotlib.get_backend()) is not pt.backend_interactive: #'TkAgg': 
-            plt.switch_backend(pt.backend_interactive)
-    else:
-        if str(matplotlib.get_backend()) is not pt.backend_noninteractive: #'Agg':
-            plt.switch_backend(pt.backend_noninteractive)  
+     # Select plotting back-end based on on-screen plotting or direct to file without requiring x-windowing
+    if not axes: # If axes are provided, leave backend as-is.
+        if draw:
+            if str(matplotlib.get_backend()) != pt.backend_interactive: #'TkAgg': 
+                plt.switch_backend(pt.backend_interactive)
+        else:
+            if str(matplotlib.get_backend()) != pt.backend_noninteractive: #'Agg':
+                plt.switch_backend(pt.backend_noninteractive)  
 
 
     spacing = ((xmaxfg-xminfg)/(xsizefg*unit), (ymaxfg-yminfg)/(ysizefg*unit), (zmaxfg-zminfg)/(zsizefg*unit))
@@ -555,10 +558,15 @@ def plot_isosurface(filename=None,
 
         logging.info("Selected color range: "+str(vminuse)+" to "+str(vmaxuse))
 
-    # Create 300 dpi image of suitable size
-    fig = plt.figure(figsize=[4.5,4.5],dpi=300)
-    #ax1 = fig.gca(projection='3d')
-    ax1 = fig.add_subplot(111, projection='3d')
+    if not axes:
+        # Create 300 dpi image of suitable size
+        fig1 = plt.figure(figsize=[4.5,4.5],dpi=300)
+        #ax1 = fig.gca(projection='3d')
+        ax1 = fig.add_subplot(111, projection='3d')
+    else:
+        ax1=axes
+        fig1 = plt.gcf() # get current figure
+    
 
     # If requested high res image
     if highres:
@@ -593,7 +601,7 @@ def plot_isosurface(filename=None,
 
 
         # Set camera angle
-        ax1.view_init(elev=angle[0], azim=angle[1])
+        ax1.view_init(elev=viewangle[0], azim=viewangle[1])
         # Set virtual bounding box
         ax1.set_xlim([midvals[2]-maxrange, midvals[2]+maxrange])
         ax1.set_ylim([midvals[0]-maxrange, midvals[0]+maxrange])
@@ -603,12 +611,12 @@ def plot_isosurface(filename=None,
     else: # 3D or 2.9D ecliptic, leave as is
         generatedsurface = ax1.plot_trisurf(verts[:,0], verts[:,1], verts[:,2], triangles=faces,
                                             cmap=cmapuse, norm=norm, vmin=vminuse, vmax=vmaxuse, 
-                                            lw=0.2, shade=False, edgecolors=None, antialiased=transparent)
+                                            lw=0.2, shade=False, edgecolors=None, antialiased=transparent, zorder=20)
         ax1.set_xlabel("x ["+unitstr+"]", fontsize=fontsize3)
         ax1.set_ylabel("y ["+unitstr+"]", fontsize=fontsize3)
         ax1.set_zlabel("z ["+unitstr+"]", fontsize=fontsize3)
         # Set camera angle
-        ax1.view_init(elev=angle[0], azim=angle[1])
+        ax1.view_init(elev=viewangle[0], azim=viewangle[1])
         # Set virtual bounding box
         ax1.set_xlim([midvals[0]-maxrange, midvals[0]+maxrange])
         ax1.set_ylim([midvals[1]-maxrange, midvals[1]+maxrange])
@@ -640,28 +648,86 @@ def plot_isosurface(filename=None,
 
 
     if not nocb:
-        # First draw colorbar
-        if usesci==0:        
-            cb = fig.colorbar(generatedsurface,ticks=ticks, format=mtick.FuncFormatter(pt.plot.cbfmt), drawedges=False, fraction=0.023, pad=0.02)
+        if cbaxes: 
+            # Colorbar axes are provided
+            cax = cbaxes
+            cbdir="right"; horalign="left"
+        elif internalcb:
+            # Colorbar within plot area
+            cbloc=1; cbdir="left"; horalign="right"
+            if type(internalcb) is str:
+                if internalcb=="NW":
+                    cbloc=2; cbdir="right"; horalign="left"
+                if internalcb=="SW": 
+                    cbloc=3; cbdir="right"; horalign="left"
+                if internalcb=="SE": 
+                    cbloc=4; cbdir="left";  horalign="right"
+            # borderpad default value is 0.5, need to increase it to make room for colorbar title
+            cax = inset_axes(ax1, width="5%", height="35%", loc=cbloc, borderpad=1.5,
+                             bbox_transform=ax1.transAxes, bbox_to_anchor=(0,0,1,1))
         else:
-            cb = fig.colorbar(generatedsurface,ticks=ticks,format=mtick.FuncFormatter(pt.plot.cbfmtsci),drawedges=False, fraction=0.046, pad=0.04)
+            # Split existing axes to make room for colorbar
+            divider = make_axes_locatable(ax1)
+            if cb_horizontal:
+                cax = divider.append_axes("bottom", size="4%", pad=0.55*scale)     
+                ax1.xaxis.set_label_coords(0.5,-0.18)
+                horalign="center"
+            else:
+                cax = divider.append_axes("right", size="5%", pad=0.05)
+                horalign="left"
+            cbdir="right"
 
-        if len(cb_title_use)!=0:
+        # Colourbar title
+        if len(cb_title_use)!=0 and cbtitle is None:
             cb_title_use = pt.plot.mathmode(pt.plot.bfstring(cb_title_use))
 
+        # Set flag which affects colorbar decimal precision
         if lin is None:
             pt.plot.cb_linear = False
         else:
             pt.plot.cb_linear = True
 
+        # First draw colorbar
+        if usesci:
+            cb = plt.colorbar(fig1, ticks=ticks, format=mtick.FuncFormatter(pt.plot.cbfmtsci), cax=cax, drawedges=False,orientation='horizontal' if cb_horizontal else 'vertical')
+        else:
+            #cb = plt.colorbar(fig1, ticks=ticks, format=mtick.FormatStrFormatter('%4.2f'), cax=cax, drawedges=False)
+            cb = plt.colorbar(fig1, ticks=ticks, format=mtick.FuncFormatter(pt.plot.cbfmt), cax=cax, drawedges=False,orientation='horizontal' if cb_horizontal else 'vertical')
+        cb.outline.set_linewidth(thick)
+        cb.ax.yaxis.set_ticks_position(cbdir)
         # Ensure minor tick marks are off
         if lin is not None:
             cb.minorticks_off()
 
-        cb.ax.tick_params(labelsize=fontsize3,width=thick,length=3*thick)
-        cb.outline.set_linewidth(thick)
-        cb.ax.set_title(cb_title_use)
-        cb.ax.title.set_horizontalalignment('center')
+        if not cbaxes:
+
+            cb.ax.tick_params(labelsize=fontsize3,width=thick,length=3*thick,rotation=30 if cb_horizontal else 0)
+            cb_title = cax.set_title(cb_title_use,fontsize=fontsize3,fontweight='normal', horizontalalignment=horalign)
+            cb_title.set_position((0.,1.+0.025*scale)) # avoids having colourbar title too low when fontsize is increased
+        else:
+            cb.ax.tick_params(labelsize=fontsize,width=thick,length=3*thick)
+            cb_title = cax.set_title(cb_title_use,fontsize=fontsize,fontweight='normal', horizontalalignment=horalign)
+
+        # Perform intermediate draw if necessary to gain access to ticks
+        if (symlog is not None and np.isclose(vminuse/vmaxuse, -1.0, rtol=0.2)) or (not lin and symlog is None):
+            fig.canvas.draw() # draw to get tick positions
+
+        # Adjust placement of innermost ticks for symlog if it indeed is (quasi)symmetric
+        if symlog is not None and np.isclose(vminuse/vmaxuse, -1.0, rtol=0.2):
+            cbt=cb.ax.yaxis.get_ticklabels()
+            (cbtx,cbty) = cbt[len(cbt)//2-1].get_position() # just below zero
+            if abs(0.5-cbty)/scale < 0.1:
+                cbt[len(cbt)//2-1].set_va("top")
+            (cbtx,cbty) = cbt[len(cbt)//2+1].get_position() # just above zero
+            if abs(0.5-cbty)/scale < 0.1:
+                cbt[len(cbt)//2+1].set_va("bottom")
+            if len(cbt)>=7: # If we have at least seven ticks, may want to adjust next ones as well
+                (cbtx,cbty) = cbt[len(cbt)//2-2].get_position() # second below zero
+                if abs(0.5-cbty)/scale < 0.15:
+                    cbt[len(cbt)//2-2].set_va("top")
+                (cbtx,cbty) = cbt[len(cbt)//2+2].get_position() # second above zero
+                if abs(0.5-cbty)/scale < 0.15:
+                    cbt[len(cbt)//2+2].set_va("bottom")
 
         # Adjust precision for colorbar ticks
         thesetickvalues = cb.locator()
@@ -679,25 +745,12 @@ def plot_isosurface(filename=None,
         if int(precision_b)<1: pt.plot.decimalprecision_cblin = str(1+abs(-int(precision_b)))
         cb.update_ticks()
 
-        if symlog is not None and np.isclose(vminuse/vmaxuse, -1.0, rtol=0.2):
-            cbt=cb.ax.yaxis.get_ticklabels()
-            (cbtx,cbty) = cbt[len(cbt)//2-1].get_position() # just below zero
-            if abs(0.5-cbty)/scale < 0.1:
-                cbt[len(cbt)//2-1].set_va("top")
-            (cbtx,cbty) = cbt[len(cbt)//2+1].get_position() # just above zero
-            if abs(0.5-cbty)/scale < 0.1:
-                cbt[len(cbt)//2+1].set_va("bottom")
-            if len(cbt)>=7: # If we have at least seven ticks, may want to adjust next ones as well
-                (cbtx,cbty) = cbt[len(cbt)//2-2].get_position() # second below zero
-                if abs(0.5-cbty)/scale < 0.15:
-                    cbt[len(cbt)//2-2].set_va("top")
-                (cbtx,cbty) = cbt[len(cbt)//2+2].get_position() # second above zero
-                if abs(0.5-cbty)/scale < 0.15:
-                    cbt[len(cbt)//2+2].set_va("bottom")
-
         # if too many subticks in logarithmic colorbar:
-        if lin is None and symlog is None:
-            nlabels = len(cb.ax.yaxis.get_ticklabels()) #/ ratio
+        if not lin and symlog is None:
+            nlabels = len(cb.ax.yaxis.get_ticklabels()) / ratio
+            # Force less ticks for internal colorbars
+            if internalcb: 
+                nlabels = nlabels * 1.5
             valids = ['1','2','3','4','5','6','7','8','9']
             if nlabels > 10:
                 valids = ['1','2','3','4','5','6','8']
@@ -723,49 +776,59 @@ def plot_isosurface(filename=None,
         newax.imshow(wm)
         newax.axis('off')
 
-    plt.tight_layout()
-    savefig_pad=0.1 # The default is 0.1
-    bbox_inches=None
+    # Adjust layout. Uses tight_layout() but in fact this ensures 
+    # that long titles and tick labels are still within the plot area.
+    if axes:
+        savefig_pad=0.01
+        bbox_inches='tight'
+    elif not noborder:
+        plt.tight_layout()
+        savefig_pad=0.05 # The default is 0.1
+        bbox_inches=None
+    else:
+        plt.tight_layout(pad=0.01)
+        savefig_pad=0.01
+        bbox_inches='tight'
 
-
-    # Save output or draw on-screen
-    if not draw:
-        # Note: generated title can cause strange PNG header problems
-        # in rare cases. This problem is under investigation, but is related to the exact generated
-        # title string. This try-catch attempts to simplify the time string until output succedes.
-        outputfile_default=run+"_isosurface_"+surf_varstr+surf_opstr+"-"+color_varstr+color_opstr+stepstr+".png"
-        savefigname=pt.plot.output_path(outputdir=outputdir, outputfile=outputfile, outputfile_default=outputfile_default,nooverwrite=nooverwrite)
-        try:
-            plt.savefig(savefigname,dpi=300, bbox_inches=bbox_inches, pad_inches=savefig_pad)
-            savechange=0
-        except:
-            savechange=1
-            plot_title = "t="+'{:4.1f}'.format(timeval)+' s '
-            ax1.set_title(plot_title,fontsize=fontsize2,fontweight='bold')                
+    if not axes:
+        # Save output or draw on-screen
+        if not draw:
+            # Note: generated title can cause strange PNG header problems
+            # in rare cases. This problem is under investigation, but is related to the exact generated
+            # title string. This try-catch attempts to simplify the time string until output succedes.
+            outputfile_default=run+"_isosurface_"+surf_varstr+surf_opstr+"-"+color_varstr+color_opstr+stepstr+".png"
+            savefigname=pt.plot.output_path(outputdir=outputdir, outputfile=outputfile, outputfile_default=outputfile_default,nooverwrite=nooverwrite)
             try:
                 plt.savefig(savefigname,dpi=300, bbox_inches=bbox_inches, pad_inches=savefig_pad)
+                savechange=0
             except:
-                plot_title = "t="+str(int(timeval))+' s   '
+                savechange=1
+                plot_title = "t="+'{:4.1f}'.format(timeval)+' s '
                 ax1.set_title(plot_title,fontsize=fontsize2,fontweight='bold')                
                 try:
                     plt.savefig(savefigname,dpi=300, bbox_inches=bbox_inches, pad_inches=savefig_pad)
                 except:
-                    plot_title = ""
+                    plot_title = "t="+str(int(timeval))+' s   '
                     ax1.set_title(plot_title,fontsize=fontsize2,fontweight='bold')                
                     try:
                         plt.savefig(savefigname,dpi=300, bbox_inches=bbox_inches, pad_inches=savefig_pad)
                     except:
-                        raise IOError("Error:" + str(sys.exc_info()) +'\n' 
-                                     "Error with attempting to save figure, sometimes due to matplotlib LaTeX integration.\n \
-                                    Usually removing the title should work, but this time even that failed.")                        
+                        plot_title = ""
+                        ax1.set_title(plot_title,fontsize=fontsize2,fontweight='bold')                
+                        try:
+                            plt.savefig(savefigname,dpi=300, bbox_inches=bbox_inches, pad_inches=savefig_pad)
+                        except:
+                            raise IOError("Error:" + str(sys.exc_info()) +'\n' 
+                                        "Error with attempting to save figure, sometimes due to matplotlib LaTeX integration.\n \
+                                        Usually removing the title should work, but this time even that failed.")                        
 
-        if savechange>0:
-            logging.info("Due to rendering error, replaced image title with "+plot_title)
-        if savechange>=0:
-            logging.info(savefigname+"\n")
-    else:
-        plt.draw()
-        plt.show()
+            if savechange>0:
+                logging.info("Due to rendering error, replaced image title with "+plot_title)
+            if savechange>=0:
+                logging.info(savefigname+"\n")
+        else:
+            plt.draw()
+            plt.show()
 
 
 
@@ -1374,7 +1437,7 @@ def plot_neutral_sheet(filename=None,
                         step_reflevel += i
                         break
 
-                fsheet_xyz, ffolds = sheet_coordinate_finder(fstep, boxcoords, axisunit, step_cellids, step_reflevel, step_indexids, XmeshPass, YmeshPass)
+                fsheet_xyz, ffolds = sheet_coordinate_finder(fstep, boxcoords, axisunit, step_cellids, step_reflevel, step_indexids, XmeshPass, YmeshPass, sheetlayer)
 
 
                 # Append new dictionary as new timestep
@@ -1924,22 +1987,23 @@ def plot_neutral_sheet(filename=None,
         plt.tight_layout(pad=0.01)
         savefig_pad=0.01
         bbox_inches='tight'
-        
-    # Save output or draw on-screen
-    if not draw and not axes:
-        outputfile_default=run+"_sheet_"+varstr+operatorfilestr+stepstr+".png"
-        savefigname=pt.plot.output_path(outputfile,outputfile_default,outputdir,nooverwrite)
-        try:
-            plt.savefig(savefigname,dpi=300, bbox_inches=bbox_inches, pad_inches=savefig_pad)
-        except Exception as e:
-            logging.info("Error with attempting to save figure "+savefigname)
-            raise e
-        logging.info(savefigname+"\n")
-        plt.close()
-    elif not axes:
-        # Draw on-screen
-        plt.draw()
-        plt.show()
+
+    if not axes:    
+        # Save output or draw on-screen
+        if not draw:
+            outputfile_default=run+"_sheet_"+varstr+operatorfilestr+stepstr+".png"
+            savefigname=pt.plot.output_path(outputfile,outputfile_default,outputdir,nooverwrite)
+            try:
+                plt.savefig(savefigname,dpi=300, bbox_inches=bbox_inches, pad_inches=savefig_pad)
+            except Exception as e:
+                logging.info("Error with attempting to save figure "+savefigname)
+                raise e
+            logging.info(savefigname+"\n")
+            plt.close()
+        else:
+            # Draw on-screen
+            plt.draw()
+            plt.show()
 
 
 def sheet_coordinate_finder(f, boxcoords, axisunit, cellids, reflevel, indexids, XmeshPass, YmeshPass, sheetlayer):

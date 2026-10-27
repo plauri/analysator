@@ -577,7 +577,7 @@ def plot_threeslice(filename=None,
                   boxm=None,boxre=None,
                   colormap=None, vmin=None, vmax=None,
                   symmetric=False, absolute=None,
-                  lin=None, symlog=None, nocb=False,
+                  lin=None, symlog=None, nocb=False, internalcb=False,
                   cbtitle=None, title=None, halfaxes=False,
                   usesci=True, axisunit=None,axiscolor=None,
                   shadings=None, draw=None,
@@ -588,6 +588,8 @@ def plot_threeslice(filename=None,
                   Earth=True,
                   thick=1.0,scale=1.0,
                   expression=None,
+                  noborder=False,
+                  axes=None, cbaxes=None, cb_horizontal=False,
                   vscale=1.0,viewangle=(-60.,30.),
                   cutpointm=None,cutpointre=None,slices=None
                   ):
@@ -806,13 +808,14 @@ def plot_threeslice(filename=None,
     if str(matplotlib.get_backend()) != pt.backend_noninteractive: #'Agg':
         plt.switch_backend(pt.backend_noninteractive)
 
-    # Select plotting back-end based on on-screen plotting or direct to file without requiring x-windowing
-    if draw:
-        if str(matplotlib.get_backend()) != pt.backend_interactive: #'TkAgg': 
-            plt.switch_backend(pt.backend_interactive)
-    else:
-        if str(matplotlib.get_backend()) != pt.backend_noninteractive: #'Agg':
-            plt.switch_backend(pt.backend_noninteractive)  
+     # Select plotting back-end based on on-screen plotting or direct to file without requiring x-windowing
+    if not axes: # If axes are provided, leave backend as-is.
+        if draw:
+            if str(matplotlib.get_backend()) != pt.backend_interactive: #'TkAgg': 
+                plt.switch_backend(pt.backend_interactive)
+        else:
+            if str(matplotlib.get_backend()) != pt.backend_noninteractive: #'Agg':
+                plt.switch_backend(pt.backend_noninteractive)  
 
     Re = 6.371e+6 # Earth radius in m
     # read in mesh size and cells in ordinary space
@@ -1310,13 +1313,30 @@ def plot_threeslice(filename=None,
         if 'y' in slices: rhomap_y_list = [rhomap_y[:zr,:xr],rhomap_y[:zr,xr:],rhomap_y[zr:,:xr],rhomap_y[zr:,xr:]]
         if 'z' in slices: rhomap_z_list = [rhomap_z[:yr,:xr],rhomap_z[:yr,xr:],rhomap_z[yr:,:xr],rhomap_z[yr:,xr:]]
 
-    # Creating a new figure and a 3d axes with a custom 3d coordinate axes 
-    figsize = (6,5)
-    if nocb:
-        figsize = (5,5)
-    fig = plt.figure(figsize=figsize,dpi=150)
-    ax1 = axes3d(fig, reflevel, cutpoint, boxcoords, axisunit, axisunituse, tickinterval, fixedticks, scale,
-                 thick, axiscolor, viewangle, halfaxes, slices, Earth)
+    if not axes:
+        # Creating a new figure and a 3d axes with a custom 3d coordinate axes 
+        figsize = (6,5)
+        if nocb:
+            figsize = (5,5)
+        fig = plt.figure(figsize=figsize,dpi=150)
+        ax1 = axes3d(fig, reflevel, cutpoint, boxcoords, axisunit, axisunituse, tickinterval, fixedticks, scale,
+                    thick, axiscolor, viewangle, halfaxes, slices, Earth)
+    else:
+        ax1 = axes
+        fig = plt.gcf() # get current figure
+        if Earth:
+            u, v = np.mgrid[0:2*np.pi:40j, 0:np.pi:20j]
+            RePerAxUnit = Re/axisunituse
+            x = RePerAxUnit * np.cos(u)*np.sin(v)
+            y = RePerAxUnit * np.sin(u)*np.sin(v)
+            z = RePerAxUnit * np.cos(v)
+            albedo = np.zeros(u.shape)
+            albedo = np.arctan(-50.*x)/np.pi+0.5
+            levels = MaxNLocator(nbins=255).tick_values(0,1)
+            norm = BoundaryNorm(levels, ncolors=255, clip=True)
+            scalarmap = plt.cm.ScalarMappable(cmap='Greys',norm=norm)
+
+            ax1.plot_surface(x, y, z, facecolors=scalarmap.to_rgba(albedo),alpha=1,zorder=30)
 
     # Masking and plotting the elementary surfaces one by one (actually three by three)
     for i in range(0,4):
@@ -1584,26 +1604,66 @@ def plot_threeslice(filename=None,
 
     # Creating colorbar axes
     if not nocb:
-        cax = fig.add_axes([0.76,0.2,0.03,0.6])
-        cbdir="right"; horalign="left"
+        if cbaxes: 
+            # Colorbar axes are provided
+            cax = cbaxes
+            cbdir="right"; horalign="left"
+        elif internalcb:
+            # Colorbar within plot area
+            cbloc=1; cbdir="left"; horalign="right"
+            if type(internalcb) is str:
+                if internalcb=="NW":
+                    cbloc=2; cbdir="right"; horalign="left"
+                if internalcb=="SW": 
+                    cbloc=3; cbdir="right"; horalign="left"
+                if internalcb=="SE": 
+                    cbloc=4; cbdir="left";  horalign="right"
+            # borderpad default value is 0.5, need to increase it to make room for colorbar title
+            cax = inset_axes(ax1, width="5%", height="35%", loc=7, borderpad=1.5,
+                             bbox_transform=ax1.transAxes, bbox_to_anchor=(0,0,1,1))
+        else:
+            # Split existing axes to make room for colorbar
+            divider = make_axes_locatable(ax1)
+            if cb_horizontal:
+                cax = divider.append_axes("bottom", size="4%", pad=0.55*scale)     
+                ax1.xaxis.set_label_coords(0.5,-0.18)
+                horalign="center"
+            else:
+                cax = divider.append_axes("right", size="5%", pad=0.05)
+                #cax = fig.add_axes([0.76,0.2,0.03,0.6])
+                horalign="left"
+            cbdir="right"
+
+        # Colourbar title
+        if len(cb_title_use)!=0 and cbtitle is None:
+            cb_title_use = pt.plot.mathmode(pt.plot.bfstring(cb_title_use))
+
+        # Set flag which affects colorbar decimal precision
+        if lin is None:
+            pt.plot.cb_linear = False
+        else:
+            pt.plot.cb_linear = True
 
         # First draw colorbar
         if usesci:
-            cb = plt.colorbar(scamap, ticks=ticks, format=mtick.FuncFormatter(pt.plot.cbfmtsci), cax=cax, drawedges=False)
+            cb = plt.colorbar(scamap, ticks=ticks, format=mtick.FuncFormatter(pt.plot.cbfmtsci), cax=cax, drawedges=False,orientation='horizontal' if cb_horizontal else 'vertical')
         else:
-            cb = plt.colorbar(scamap, ticks=ticks, format=mtick.FuncFormatter(pt.plot.cbfmt), cax=cax, drawedges=False)
+            #cb = plt.colorbar(scamap, ticks=ticks, format=mtick.FormatStrFormatter('%4.2f'), cax=cax, drawedges=False)
+            cb = plt.colorbar(scamap, ticks=ticks, format=mtick.FuncFormatter(pt.plot.cbfmt), cax=cax, drawedges=False,orientation='horizontal' if cb_horizontal else 'vertical')
         cb.outline.set_linewidth(thick)
         cb.ax.yaxis.set_ticks_position(cbdir)
         # Ensure minor tick marks are off
         if lin is not None:
             cb.minorticks_off()
- 
-        cbticks = cb.get_ticks()
-        cb.set_ticks(cbticks[(cbticks>=vminuse)*(cbticks<=vmaxuse)])
 
-        cb.ax.tick_params(labelsize=fontsize3,width=thick,length=3*thick)
-        cb_title = cax.set_title(cb_title_use,fontsize=fontsize3,fontweight='bold', horizontalalignment=horalign)
-        cb_title.set_position((0.,1.+0.025*scale)) # avoids having colourbar title too low when fontsize is increased
+        if not cbaxes:
+
+            cb.ax.tick_params(labelsize=fontsize3,width=thick,length=3*thick,rotation=30 if cb_horizontal else 0)
+            cb_title = cax.set_title(cb_title_use,fontsize=fontsize3,fontweight='normal', horizontalalignment=horalign)
+            cb_title.set_position((0.,1.+0.025*scale)) # avoids having colourbar title too low when fontsize is increased
+        else:
+            cb.ax.tick_params(labelsize=fontsize,width=thick,length=3*thick)
+            cb_title = cax.set_title(cb_title_use,fontsize=fontsize,fontweight='normal', horizontalalignment=horalign)
 
         # Perform intermediate draw if necessary to gain access to ticks
         if (symlog is not None and np.isclose(vminuse/vmaxuse, -1.0, rtol=0.2)) or (not lin and symlog is None):
@@ -1644,7 +1704,10 @@ def plot_threeslice(filename=None,
 
         # if too many subticks in logarithmic colorbar:
         if not lin and symlog is None:
-            nlabels = len(cb.ax.yaxis.get_ticklabels()) # TODO implement some kind of ratio like in other scripts, if needed?
+            nlabels = len(cb.ax.yaxis.get_ticklabels()) / ratio
+            # Force less ticks for internal colorbars
+            if internalcb: 
+                nlabels = nlabels * 1.5
             valids = ['1','2','3','4','5','6','7','8','9']
             if nlabels > 10:
                 valids = ['1','2','3','4','5','6','8']
@@ -1687,27 +1750,35 @@ def plot_threeslice(filename=None,
     
     # Adjust layout. Uses tight_layout() but in fact this ensures 
     # that long titles and tick labels are still within the plot area.
-    plt.tight_layout(pad=0.01) 
-    # TODO check: a warning says tight_layout() might not be compatible with those axes. Seems to work though...
-    savefig_pad=0.01
-    bbox_inches='tight'
-
-    # Save output or draw on-screen
-    if not draw:
-        outputfile_default=run+"_threeSlice_"+varstr+operatorfilestr+stepstr+".png"
-        savefigname=pt.plot.output_path(outputfile,outputfile_default,outputdir,nooverwrite)
-
-        logging.info('Saving the figure as {}, Time since start = {:.2f} s'.format(savefigname,time.time()-t0))
-        try:
-            plt.savefig(savefigname,dpi=300, bbox_inches=bbox_inches, pad_inches=savefig_pad)
-        except Exception as e:
-            logging.info("Error with attempting to save figure "+savefigname)
-            raise e
-            logging.info('...Done! Time since start = {:.2f} s'.format(time.time()-t0))
-        logging.info(savefigname+"\n")
-        plt.close()
+    if axes:
+        savefig_pad=0.01
+        bbox_inches='tight'
+    elif not noborder:
+        plt.tight_layout()
+        savefig_pad=0.05 # The default is 0.1
+        bbox_inches=None
     else:
-        # Draw on-screen
-        plt.draw()
-        plt.show()
-        logging.info('Draw complete! Time since start = {:.2f} s'.format(time.time()-t0))
+        plt.tight_layout(pad=0.01)
+        savefig_pad=0.01
+        bbox_inches='tight'
+
+    if not axes:
+        # Save output or draw on-screen
+        if not draw:
+            outputfile_default=run+"_threeSlice_"+varstr+operatorfilestr+stepstr+".png"
+            savefigname=pt.plot.output_path(outputfile,outputfile_default,outputdir,nooverwrite)
+
+            logging.info('Saving the figure as {}, Time since start = {:.2f} s'.format(savefigname,time.time()-t0))
+            try:
+                plt.savefig(savefigname,dpi=300, bbox_inches=bbox_inches, pad_inches=savefig_pad)
+            except Exception as e:
+                logging.info("Error with attempting to save figure "+savefigname)
+                raise e
+                logging.info('...Done! Time since start = {:.2f} s'.format(time.time()-t0))
+            logging.info(savefigname+"\n")
+            plt.close()
+        else:
+            # Draw on-screen
+            plt.draw()
+            plt.show()
+            logging.info('Draw complete! Time since start = {:.2f} s'.format(time.time()-t0))
